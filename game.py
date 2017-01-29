@@ -1,74 +1,200 @@
-import time, copy
-import screen, tetromino
-
-
-KEY_MLEFT   = 'a'
-KEY_MRIGHT  = 'd'
-KEY_MDOWN   = 's'
-KEY_RLEFT   = 'q'
-KEY_RRIGHT  = 'e'
-KEY_MBOTTOM = ' '
-GAME_KEYS   = set([KEY_MLEFT, KEY_MRIGHT, KEY_MDOWN, KEY_RLEFT, KEY_RRIGHT])
+import time, copy, curses
+import screen, tetromino, keyboard
 
 
 def start():
+    game = Game()
+    game.start()
 
-    scene = screen.Scene(0, 0, 10, 20)
-    play(scene)
-    game_over()
+class Game:
+
+    def __init__(self):
+
+        self.running = False
+        self.start_time = None
+        self.last_au = None
+        self.au_delay = 1
+
+        board_size = (10, 20)
+        self.scene = Scene(0, 0, *board_size)
+        self.stats = Stats(0, 0, 20, board_size[1])
+
+        self.groupomino = tetromino.Groupomino()
+        self.tetromino = None
+        self.n_tetromino = tetromino.get_random()
+        self.new_tetromino()
+
+        frame_w = self.scene.get_width() + self.stats.get_width()
+        frame_h = self.scene.get_height()
+
+        x = (screen.interface.get_width() - frame_w) // 2
+        y = (screen.interface.get_height() - frame_h) // 2
+
+        self.scene.move(x, y)
+        x += self.scene.get_width()
+        self.stats.move(x, y)
+
+    def start(self):
+
+        self.start_time = time.time()
+        self.last_au = self.start_time
+
+        self.running = True
+        while self.running:
+
+            time.sleep(1 / 20)
+
+            self.update()
+            self.draw()
+            self.handle_key()
+
+    def end(self):
+
+        self.running = False
+
+        screen.log("game_over:: Ha!")    
+        while not screen.interface.get_key():
+            pass
+
+        self.stats.clear()
+        self.stats.refresh()
+        self.scene.clear()
+        self.scene.refresh()
+
+        return self.stats.get_score()
+
+    def draw(self):
+
+        self.scene.wipe()
+        self.scene.draw(self.groupomino)
+        self.scene.draw(self.tetromino)
+        self.scene.refresh()
+
+        self.stats.wipe()
+        self.stats.draw()
+        self.stats.refresh()
+
+    def update(self, force = False):
+
+        if time.time() - self.last_au > self.au_delay or force:
+
+            self.last_au = time.time()
+            self.au_delay = (2 ** ((self.start_time - self.last_au)/ 120) * 3 / 4
+                + 1 / 4)
+            screen.log("update:: au_delay: {}".format(self.au_delay))
+            
+            if self.legal_move(keyboard.DOWN):
+                self.stats.add_score(1)
+
+            else:
+                self.new_tetromino()
+                lines = self.groupomino.chop(self.scene.get_board_size()[0])
+                self.stats.add_score(
+                    4 ** lines * self.scene.get_board_size()[0])
 
 
-def play(scene):
+            if self.tetromino.collide(
+                self.groupomino, self.scene.get_board_size()):
+                self.end()
 
-    au_delay = 1
-    last_au = time.time()
 
-    cur_tetromino = tetromino.get_random()
-    tetrominos = set()
-
-    while True:
+    def handle_key(self):
 
         key = screen.interface.get_key()
 
-        if key in GAME_KEYS:
-            legal_move(key, cur_tetromino, tetrominos)
-        elif key == KEY_MBOTTOM:
-            while legal_move(KEY_MDOWN, cur_tetromino, tetrominos):
-                pass
+        if key in keyboard.game():
 
-        if time.time() - last_au > au_delay:
+            if key == keyboard.BOTTOM:
+                while self.legal_move(keyboard.DOWN):
+                    self.stats.add_score(3)
+                self.update(True)
 
-            last_au = time.time()
-            
-            if not legal_move(KEY_MDOWN, cur_tetromino, tetrominos):
-                tetrominos.add(cur_tetromino)
-                cur_tetromino = tetromino.get_random()
+            elif key == keyboard.BACK:
+                self.end()
 
-            if cur_tetromino.collide(tetrominos):
-                break
+            else:
+                self.legal_move(key)
+                if key == keyboard.DOWN:
+                    self.stats.add_score(2)
 
-        scene.clear()
-        [scene.draw_tetromino(t) for t in tetrominos]
-        scene.draw_tetromino(cur_tetromino)
-        scene.refresh()
+    def new_tetromino(self):
+        
+        if self.tetromino != None:
+            self.groupomino.add(self.tetromino)
+            self.stats.count_tetromino(self.tetromino)
+
+        self.tetromino = self.n_tetromino
+        self.n_tetromino = tetromino.get_random()
+
+        self.tetromino.set_pos(((self.scene.get_board_size()[0]
+            - self.tetromino.get_width()) // 2, 0))
+
+        while self.legal_move(keyboard.UP):
+            pass
+
+    def legal_move(self, key):
+
+        new_t = copy.deepcopy(self.tetromino)
+        new_t.apply_key(key)
+
+        if not new_t.collide(self.groupomino, self.scene.get_board_size()):
+            self.tetromino.apply_key(key)
+            screen.log('legal_move:: {}'.format(key))
+            return True
+
+        return False
 
 
-def game_over():
+class Scene(screen.Window):
 
-    screen.log("game_over:: Ha!")    
-    while not screen.interface.get_key():
-        pass
+    def __init__(self, x, y, w, h):
+        self.board_size = (w, h)
+        w, h = 2 * w + 1, h + 2
+        scr = curses.newwin(h, w, y, x)
+        super().__init__(x, y, w, h, scr, "Game")
+
+    def draw(self, mino):
+        for c in mino.get_char_coverage():
+            self.write(c[1], 2 * c[0], c[2])
+
+    def get_board_size(self):
+        return self.board_size
 
 
+class Stats(screen.Window):
 
-def legal_move(key, t, tetrominos):
+    def __init__(self, x, y, w, h):
+        w, h = w + 2, h + 2
+        scr = curses.newwin(h, w, y, x)
+        super().__init__(x, y, w, h, scr, "Stats")
 
-    new_t = copy.deepcopy(t)
-    new_t.apply_key(key)
+        self.score = 0
+        self.start_time = time.time()
+        self.tetro_stats = {T.char: 0 for T in tetromino.TETROMINOS}
 
-    if not new_t.collide(tetrominos):
-        t.apply_key(key)
-        screen.log('legal_move:: {}'.format(key))
-        return True
+    def count_tetromino(self, t):
+        self.tetro_stats[t.get_char()] += 1
 
-    return False
+    def get_score(self):
+        return self.score
+
+    def get_duration_str(self):
+        duration = time.time() - self.start_time
+        s = int(duration % 60)
+        m = int(duration // 60)
+        return "{:02d}:{:02d}".format(m, s)
+
+    def add_score(self, n):
+        self.score += n
+
+    def draw(self):
+
+        self.write(1, 1, "Time: {}".format(self.get_duration_str()))
+
+        self.write(3, 1, "Score: {}".format(self.score))
+
+        i = 0
+        for t, s in self.tetro_stats.items():
+            self.write(5 + 2 * i, 1, "{}: {}".format(t, s))
+            i += 1
+

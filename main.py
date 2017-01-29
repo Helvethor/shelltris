@@ -4,7 +4,6 @@
 import sys
 import menu, screen
 
-
 def main():
 
     exception = None

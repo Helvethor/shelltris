@@ -1,19 +1,19 @@
 import random, copy
-from itertools import chain
-
-import screen, game
+import screen, game, keyboard
 
 
 class Tetromino:
 
     count = 0
 
-    def __init__(self):
-        self.bitmap = []
-        self.id = chr(Tetromino.count + ord('A'))
-        self.char = '#'
-        Tetromino.count += 1
-        self.pos = [0, 0]
+    def __init__(self, block_map, char = '#', pos = [0, 0]):
+
+        self.char = char
+        self.block_map = block_map
+        self.pos = list(pos)
+
+        self.id = chr(__class__.count + ord('A'))
+        __class__.count += 1
 
     def __repr__(self):
         return str(self)
@@ -25,13 +25,34 @@ class Tetromino:
         return self.id
 
     def get_char(self):
-        return self.id
+        return self.char
+
+    def get_blockmap(self):
+        return self.block_map
+
+    def get_coverage(self):
+        return {(b[0] + self.get_x(), b[1] + self.get_y())
+            for b in self.block_map}
+
+    def get_char_coverage(self):
+        return {(b[0] + self.get_x(), b[1] + self.get_y(), self.get_char())
+            for b in self.block_map}
+
+    def get_span(self, dim):
+
+        M = max(self.get_coverage(), key = lambda c: c[dim])[dim]
+        m = min(self.get_coverage(), key = lambda c: c[dim])[dim]
+
+        return M - m + 1
 
     def get_width(self):
-        return len(self.bitmap[0])
+        return self.get_span(0)
 
     def get_height(self):
-        return len(self.bitmap)
+        return self.get_span(1)
+
+    def get_size(self):
+        return max(self.get_width(), self.get_height())
 
     def get_pos(self):
         return pos
@@ -43,27 +64,7 @@ class Tetromino:
         return self.pos[1]
 
     def set_pos(self, pos):
-        self.pos = pos
-
-    def apply_key(self, key):
-
-        if key == game.KEY_MLEFT:
-            self.move_left()
-
-        elif key == game.KEY_MRIGHT:
-            self.move_right()
-
-        elif key == game.KEY_MDOWN:
-            self.move_down()
-
-        elif key == game.KEY_RLEFT:
-            self.rotate_left()
-
-        elif key == game.KEY_RRIGHT:
-            self.rotate_right()
-
-        else:
-            raise Exception("Unhandled key: {}".format(key))
+        self.pos = list(pos)
 
     def move_right(self):
         self.pos[0] += 1
@@ -74,113 +75,155 @@ class Tetromino:
     def move_down(self):
         self.pos[1] += 1
 
+    def move_up(self):
+        self.pos[1] -= 1
+
     def rotate_left(self):
-        rangei = list(range(self.get_height()))
-        rangej = list(reversed(range(self.get_width())))
-        self.permute(rangei, rangej)
+        c = self.get_size() - 1
+        self.block_map = {(p[1], c - p[0]) for p in self.block_map}
 
     def rotate_right(self):
-        rangei = list(reversed(range(self.get_height())))
-        rangej = list(range(self.get_width()))
-        self.permute(rangei, rangej)
+        c = self.get_size() - 1
+        self.block_map = {(c -p[1], p[0]) for p in self.block_map}
 
-    def permute(self, rangei, rangej):
+    def apply_key(self, key):
 
-        self.bitmap = [[self.bitmap[i][j]
-            for i in rangei]
-            for j in rangej]
+        if key == keyboard.LEFT:
+            self.move_left()
 
-    def get_bitmap(self):
-        return self.bitmap
+        elif key == keyboard.RIGHT:
+            self.move_right()
 
-    def get_charmap(self):
-        return [[self.char if bit else ' '
-            for bit in chain.from_iterable(zip(bitline, [0] * len(bitline)))]
-            for bitline in self.bitmap]
+        elif key == keyboard.DOWN:
+            self.move_down()
 
-    def get_coverage(self):
-        return {(i + self.get_x(), j + self.get_y())
-            for i in range(len(self.bitmap))
-            for j in range(len(self.bitmap[0]))
-            if self.bitmap[i][j]}
+        elif key == keyboard.UP:
+            self.move_up()
 
-    def collide(self, others):
+        elif key == keyboard.ROT_L:
+            self.rotate_left()
+
+        elif key == keyboard.ROT_R:
+            self.rotate_right()
+
+        else:
+            return False
+
+        return True
+
+    def collide(self, groupomino, scene_size):
         
-        screen.log("collide:: s: {}, o: {}".format(self,
-            [o.get_id() for o in others]))
         s_coverage = self.get_coverage()
 
         for c in s_coverage:
-            if (c[0] < 0 or c[0] >= 10
-                or c[1] < 0 or c[1] >= 20):
-
-                screen.log("collide:: border")
+            if (c[0] < 0 or c[0] >= scene_size[0]
+                or c[1] < 0 or c[1] >= scene_size[1]):
                 return True
 
-        for o in others:
-            o_coverage = o.get_coverage()
-
-            if len(s_coverage.intersection(o_coverage)) > 0:
-
-                screen.log("collide:: collision: {}".format(o))
-                return True
+        g_coverage = groupomino.get_coverage()  
+        if len(s_coverage.intersection(g_coverage)) > 0:
+            return True
 
         return False
 
 
+class Groupomino:
+
+    def __init__(self):
+        self.char_coverage = set()
+
+    def get_coverage(self):
+        return {(b[0], b[1]) for b in self.char_coverage}
+
+    def get_char_coverage(self):
+        return self.char_coverage
+
+    def add(self, tetromino):
+        self.char_coverage = self.char_coverage.union(
+            tetromino.get_char_coverage())
+
+    def chop(self, scene_width):
+
+        lines = self.find_choppable(scene_width)
+
+        for line in lines:
+            self.char_coverage = {b if b[1] > line else (b[0], b[1] + 1, b[2])
+                for b in self.char_coverage 
+                if b[1] != line}
+
+        return len(lines)
+
+    def find_choppable(self, scene_width):
+
+        mH = min(self.get_coverage(), key = lambda c: c[1])[1]
+        MH = max(self.get_coverage(), key = lambda c: c[1])[1]
+
+        lines = set()
+
+        for line in range(mH, MH + 1):
+            coverage = {c[0] for c in self.get_coverage() if c[1] == line}
+
+            if len(coverage) == scene_width:
+                lines.add(line)
+                screen.log("find_choppable:: line: {}".format(line))
+
+        return lines
+
 class I(Tetromino):
 
-    def __init__(self):
-        super().__init__()
-        self.bitmap = [[True,  True,  True,  True]]
-        self.char = 'I'
-
-class J(Tetromino):
+    char = 'I'
 
     def __init__(self):
-        super().__init__()
-        self.bitmap = [ [True,  True,  True],
-                        [False, False, True]]
-        self.char = 'J'
-
-class L(Tetromino):
-
-    def __init__(self):
-        super().__init__()
-        self.bitmap = [ [True,  True,  True],
-                        [True,  False, False]]
-        self.char = 'L'
-
-class O(Tetromino):
-
-    def __init__(self):
-        super().__init__()
-        self.bitmap = [ [True,  True] ,
-                        [True,  True]]
-        self.char = 'O'
+        block_map = {(0, 1), (1, 1), (2, 1), (3, 1)}
+        super().__init__(block_map, __class__.char)
 
 class T(Tetromino):
 
+    char = 'T'
+
     def __init__(self):
-        super().__init__()
-        self.bitmap = [ [True,  True,  True],
-                        [False, True,  False]]
-        self.char = 'T'
+        block_map = {(0, 1), (1, 1), (1, 0), (2, 1)}
+        super().__init__(block_map, __class__.char)
+
+class J(Tetromino):
+
+    char = 'J'
+
+    def __init__(self):
+        block_map = {(0, 1), (1, 1), (2, 1), (2, 2)}
+        super().__init__(block_map, __class__.char)
+
+class L(Tetromino):
+
+    char = 'L'
+
+    def __init__(self):
+        block_map = {(0, 2), (0, 1), (1, 1), (2, 1)}
+        super().__init__(block_map, __class__.char)
 
 class S(Tetromino):
 
+    char = 'S'
+
     def __init__(self):
-        super().__init__()
-        self.bitmap = [ [False, True,  True],
-                        [True,  True,  False]]
-        self.char = 'S'
+        block_map = {(0, 2), (1, 2), (1, 1), (2, 1)}
+        super().__init__(block_map, __class__.char)
 
 class Z(Tetromino):
+
+    char = 'Z'
+
     def __init__(self):
-        super().__init__()
-        self.bitmap = [ [True,  True,  False],
-                        [False, True,  True]]
-        self.char = 'Z'
+        block_map = {(0, 1), (1, 1), (1, 2), (2, 2)}
+        super().__init__(block_map, __class__.char)
+
+class O(Tetromino):
+
+    char = 'O'
+
+    def __init__(self):
+        block_map = {(0, 0), (0, 1), (1, 0), (1, 1)}
+        super().__init__(block_map, __class__.char)
 
 
 def get_random():
